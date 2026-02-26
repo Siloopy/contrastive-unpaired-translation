@@ -1,0 +1,4 @@
+﻿trim_ratio,margin,cell_inner,agg_a,agg_b,spearman_rho,order_a,order_b,same_ordering
+0.1,0.1,0.45,mean,median,1.0,CUT_VEF_stable < CUT_VEF < CUT_baseline,CUT_VEF_stable < CUT_VEF < CUT_baseline,True
+0.1,0.1,0.45,mean,trim,1.0,CUT_VEF_stable < CUT_VEF < CUT_baseline,CUT_VEF_stable < CUT_VEF < CUT_baseline,True
+0.1,0.1,0.45,median,trim,1.0,CUT_VEF_stable < CUT_VEF < CUT_baseline,CUT_VEF_stable < CUT_VEF < CUT_baseline,True

@@ -5,6 +5,9 @@ from . import networks
 from .patchnce import PatchNCELoss
 import util.util as util
 
+# ✅ Step2: import VEF
+from .vef import VEF
+
 
 class CUTModel(BaseModel):
     """ This class implements CUT and FastCUT model, described in the paper
@@ -19,6 +22,9 @@ class CUTModel(BaseModel):
     def modify_commandline_options(parser, is_train=True):
         """  Configures options specific for CUT model
         """
+
+        parser.set_defaults(model='cut')
+
         parser.add_argument('--CUT_mode', type=str, default="CUT", choices='(CUT, cut, FastCUT, fastcut)')
 
         parser.add_argument('--lambda_GAN', type=float, default=1.0, help='weight for GAN loss：GAN(G(X))')
@@ -66,17 +72,31 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
+        # ✅ Step2: add VEF into model list so it can be saved/loaded
         if self.isTrain:
-            self.model_names = ['G', 'F', 'D']
-        else:  # during test time, only load G
-            self.model_names = ['G']
+            self.model_names = ['G', 'F', 'D', 'VEF']
+        else:  # during test time, only load G (+ VEF)
+            self.model_names = ['G', 'VEF']
 
         # define networks (both generator and discriminator)
-        self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, opt.no_antialias_up, self.gpu_ids, opt)
-        self.netF = networks.define_F(opt.input_nc, opt.netF, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
+        self.netG = networks.define_G(
+            opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.normG,
+            not opt.no_dropout, opt.init_type, opt.init_gain,
+            opt.no_antialias, opt.no_antialias_up, self.gpu_ids, opt
+        )
+        self.netF = networks.define_F(
+            opt.input_nc, opt.netF, opt.normG, not opt.no_dropout,
+            opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt
+        )
+
+        # ✅ Step2: define VEF module
+        self.netVEF = VEF().to(self.device)
 
         if self.isTrain:
-            self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
+            self.netD = networks.define_D(
+                opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D, opt.normD,
+                opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt
+            )
 
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
@@ -86,7 +106,12 @@ class CUTModel(BaseModel):
                 self.criterionNCE.append(PatchNCELoss(opt).to(self.device))
 
             self.criterionIdt = torch.nn.L1Loss().to(self.device)
-            self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
+
+            # ✅ Step2: optimizer_G should include both G and VEF params
+            self.optimizer_G = torch.optim.Adam(
+                list(self.netG.parameters()) + list(self.netVEF.parameters()),
+                lr=opt.lr, betas=(opt.beta1, opt.beta2)
+            )
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
@@ -121,7 +146,7 @@ class CUTModel(BaseModel):
         self.loss_D.backward()
         self.optimizer_D.step()
 
-        # update G
+        # update G (+ VEF)
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
         if self.opt.netF == 'mlp_sample':
@@ -145,7 +170,15 @@ class CUTModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.real = torch.cat((self.real_A, self.real_B), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
+
+        # ✅ Step2: apply VEF before feeding into netG
+        # - if nce_idt: only enhance A branch, keep B unchanged for identity mapping
+        if self.opt.nce_idt and self.opt.isTrain:
+            real_A_enh = self.netVEF(self.real_A)
+            self.real = torch.cat((real_A_enh, self.real_B), dim=0)
+        else:
+            self.real = self.netVEF(self.real_A)
+
         if self.opt.flip_equivariance:
             self.flipped_for_equivariance = self.opt.isTrain and (np.random.random() < 0.5)
             if self.flipped_for_equivariance:
